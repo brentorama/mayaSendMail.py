@@ -1,0 +1,279 @@
+//create the node and add todays date, user name, proper name and email address, dailiesMovs, textField, htmlField, htmlString
+
+global proc makeMailNode(){
+    
+    if (`objExists "mailNode"`)
+        {
+        int $index = `getAttr mailNode.index`;
+        delete "mailNode";
+        if ($index != 0)  {scriptJob -f -k $index;} 
+        }
+    createNode unknown -n "mailNode";
+    for ($string in {"date", "userName", "fullName", "emailAddress", "dailies", "textField", 
+    "htmlField", "htmlString", "index", "toField", "fromField", "subField"}) 
+    {addAttr -ln $string -dt "string" -keyable true;}
+    string $firstName;
+    setAttr -type "string" mailNode.userName `getenv USERNAME`;
+    setAttr -type "string" mailNode.date `date -f YYMMDD `;
+    setAttr -type "string" mailNode.fullName ("Brent Forrest");
+    setAttr -type "string" mailNode.emailAddress ("b_forrest@cafegroup.info");
+}
+
+//kill the node if the UI is closed
+
+global proc killMailNode(){
+if (`objExists "mailNode"`) {delete mailNode;}
+}
+
+//create the UI with tabs for the interface and  <html> textfield - this textField is what feeds the python mailer 
+
+global proc makeMailUI(){
+    string $textField, $htmlField, $htmlString, $toField, $fromField, $subField;
+    int $index;
+    if (`window -exists dailyMailer`){deleteUI dailyMailer;}
+    window -w 615 -h 334 -s false -title "Dailies" -iconName "dailyMailer" dailyMailer;
+        columnLayout -co "left" 5 main;
+            separator -h 10;
+                rowColumnLayout -nc 2 topBar;
+                    rowColumnLayout -nc 2 inputs;
+                        text -al "right" -w 30 -l "To: ";
+                        $toField = `textField -w 300 toField`;
+                        text -al "right"-l "From: ";
+                        $fromField = `textField fromField`;
+                        text -al "right"-l "Subject: ";
+                        $subField = `textField subField`;
+                    setParent topBar;
+                    columnLayout -rs 3 image;
+                        separator -h 1;
+                        string $image = "/salu/home/forrest/Scripts/mailer.xpm";
+                        image -i $image;    
+                    setParent topBar;
+                setParent main;
+                separator -h 10;
+                columnLayout email;
+                    $textField = `scrollField -h 200 -w 600 Body`;
+                    $htmlField = `scrollField  -h 200 -w 600 -vis 0 Html`;
+                setParent email;
+                rowColumnLayout -nc 3 sendIt;
+                   separator -w 500 -h 1;
+                   button -w 50 -al "right" -en 1 -l "html" -command "switchIt" switcher;
+                   button -w 50 -al "right" -l "Send" -command "sendIt" sender;
+                setParent sendIt;
+            setParent ..;
+        columnLayout -cw 20 options;
+            radioButtonGrp -sl 1 -en2 1 -en3 0 -cw3 70 100 15 -nrb 3 -l1 "Dailies" -l2 "MEL Updated" -l3 "Masterscenes"
+            -on1 "fillOutMail(0)" -on2 "fillOutMail(1)" whatDo;
+        setParent..;
+	showWindow;
+	
+    int $index = `scriptJob -kws -uid "dailyMailer" killMailNode`;
+
+    if (!`objExists "mailNode"`){makeMailNode;}
+    setAttr -type "string" mailNode.index $index;
+    setAttr -type "string" mailNode.textField $textField;
+    setAttr -type "string" mailNode.htmlField $htmlField;
+    setAttr -type "string" mailNode.toField $toField;
+    setAttr -type "string" mailNode.fromField $fromField;
+    setAttr -type "string" mailNode.subField $subField;   
+}
+
+//switch between the html field and the text input field in the daily mailer - use this is you want to edit the mail html directly
+
+global proc switchIt(){
+    string $textField = `getAttr mailNode.textField`;
+    string $htmlField = `getAttr mailNode.htmlField`;
+    int $isIt = `scrollField -q -vis $htmlField`;
+    if ($isIt==0){convertToHtml; scrollField -e -vis 1 $htmlField; scrollField -e -vis 0 $textField;}
+    if ($isIt==1){scrollField -e -vis 0 $htmlField; scrollField -e -vis 1 $textField;}
+}
+
+//find the files in dailies that belong to user, reduce to folders.  The int "n" decides if the message is for dailies or mel
+
+global proc string[] writeBody(int $n){
+    waitCursor -st on;
+    int $size;
+    string $mainInfo[] = {("Dailies Uploaded:"), "Mel Updated\n"};
+    string $movies[], $dailies[], $firstName[], $movList[], $subDir[], $emailBody[];
+    string $name = `getAttr mailNode.fullName`;
+    tokenize $name " " $firstName;
+    string $fxDir = "/salu/proj/KON/dailies/FX/";
+    string $todaysDailies = ($fxDir+`getAttr mailNode.date`);
+    string $user = `getAttr mailNode.userName`;
+    string $checkUser;
+    if ((!`filetest -d $todaysDailies`)&&($n==0)) {
+        $emailBody = {"There is no dalies folder for today, or the folder is misnamed\n", $name}; 
+        warning $emailBody[0];
+    }else{
+        $emailBody = {("Is cheers for good work, is "+ $firstName[0]+".\n"), $mainInfo[$n]};
+        if ($n==0){
+            string $dir = `system ("dir -1 /"+ $todaysDailies)`;
+            $size = `tokenize $dir "\n" $subDir`;
+            for ($one in $subDir){
+                $check = ($todaysDailies+"/"+$one);
+                string $dirM = `system ("dir -1 "+ $check)`;
+                tokenize $dirM "\n" $movies;
+                for ($mov in $movies) {
+                    //use system to see if the file's user matches the current user
+                    string $checkIt = ("ls -l "+($check+"/"+$mov));
+                    $checkUser = `system ($checkIt)`;
+                    string $buffer[];
+                    tokenize $checkUser " " $buffer;
+                    $checkUser = $buffer[2];
+                    //if yes, add that file to the dailies check list
+                                 
+                    if ($checkUser == $user){
+                        $movList [`size $movList`] = $mov;
+                        $dailies [`size $dailies`] = $mov;
+                    }
+                }
+                if (`size $movList` > 0) {
+                    $emailBody[`size $emailBody`] = ("\n" + $check + "\n");
+                    for ($m in $movList){$emailBody[`size $emailBody`] = $m;}
+                    clear $movList;             
+                }
+            }
+            
+            string $strip[];
+            string $buffer[];
+            for ($one in $dailies){
+                tokenize $one "." $buffer;
+                tokenize $buffer[0] "_" $buffer;
+                tokenize $buffer[0] "EPS" $buffer;
+                $strip[`size $strip`] = $buffer[1];  
+            }
+        string $send = `stringArrayToString $strip " "`;
+        setAttr -type "string" mailNode.dailies $send;
+        }
+        if ($n==1) {
+            string $command =  ("find /salu/home/"+$user+"/proj/KON/seq/EPS11*/*/FX*/mel/ -type f -daystart -mtime -1 -prune");
+            string $list = `system ($command)`;
+            string $listFiles[] = stringToStringArray ($list, "\n");
+            string $listMel[];
+            for ($one in $listFiles){
+                if (!`gmatch $one "*~*"`){$listMel[`size $listMel`] = $one;}
+            }
+            if (`size $listMel`< 1){$emailBody[`size $emailBody`] = "There are no mel files matching today's date.";}
+            for ($one in $listMel){
+                string $buffer[];
+                tokenize $one "/" $buffer;
+                $emailBody[`size $emailBody`] = ($buffer[10]);
+                }
+            }
+
+        $emailBody[`size $emailBody`] = ("\n" + $name + "\nOLM Special Effects");
+    }
+    waitCursor -st off;
+    return $emailBody;
+}
+
+//write the body, fill out the to, from , subject lines of the email
+
+global proc fillOutMail(int $n){
+    string $dailies, $from, $toField, $fromField, $subField, $textField;
+    string $body[], $subject[], $to[];
+    $from = `getAttr mailNode.emailAddress`;
+    $to = {"b_forrest@cafegroup.info"};
+    $fromField = `getAttr mailNode.fromField`;
+    $toField = `getAttr mailNode.toField`;
+    $subField = `getAttr mailNode.subField`;
+    $textField = `getAttr mailNode.textField`;
+    $body = writeBody($n);  
+    $subject = {("[KON][FX] Dailies uploaded "+`getAttr mailNode.dailies`),"[KON][FX][shareUp] Mel Updated"};
+    textField -e -tx $to[$n] $toField;
+    textField -e -tx $subject[$n] $subField;
+    textField -e -tx $from $fromField;
+    scrollField -e -cl $textField;
+    for ($line in $body){scrollField -e -it ($line+"\n") $textField;}
+}
+
+//convert the text of the email to HTML for nice formatted emails
+
+global proc convertToHtml(){
+    string $textField, $fullName, $htmlField, $htmlString;
+    string $body[], $html[], $splitLine[];
+    string $buff;
+    string $curLine;
+    //convert the contents of the emailentry field to a stringarray (body)
+	$htmlField = `getAttr mailNode.htmlField`;
+    $textField = `getAttr mailNode.textField`;
+	$fullName = `getAttr mailNode.fullName`;
+    $buff = `scrollField -q -tx $textField`;
+    $body = stringToStringArray ($buff, "\n");
+    //create the html output
+    $html = {"<html>","<head></head>","<body>","<p>"};
+
+    for ($line in $body){
+        if ((`gmatch $line "*ailies Upload*"`)||(`gmatch $line "*Mel Updated*"`)){
+			$curLine = ("<br><font size=\"4\"><b>"+$line+"</b></font><br>");}
+        else if (`gmatch $line "*/salu/proj/KON/dailies/FX/*"`){
+			$curLine = ("<br><span style=\"color:rgb(102,102,102)\">"+$line+"</span><br><br>");}
+        else if (`gmatch $line "*KONEPS*FX*"`){
+			string $epFont[3], $splitLine[1];string $user = `system ("ls -l /salu/proj/KON/dailies/FX/150908/EPS111/KONEPS111013c_FXpresets.v7.mov")`;
+string $buffer[];
+tokenize $user " " $buffer;
+$user = $buffer[2];
+			int $lSize = `size $line`;
+			$epFont[0] = `substring $line 1 6`;
+			$epFont[1] = `substring $line 7 9`;
+			$splitLine[0] = `substring $line 10 $lSize`;
+			tokenize $splitLine[0] "_" $splitLine;
+			$epFont[2] = $splitLine[0];	
+			$epFont[3] = ("_"+$splitLine[1]);	
+			$curLine = ("<font color=\"#0000ff\">"+$epFont[0]+"</font><b>"+$epFont[1]+"<font color=\"#ff0000\">"+$epFont[2]+"</font></b>"+$epFont[3]+"<br>");
+		}
+        else if (`gmatch $line ("*"+$fullName+"*")`){
+			$curLine = ("<br><span style=\"font-family:georgia,serif;color:rgb(136,136,136)\">"+$fullName+"</span><br></br>");
+		}
+		else if (`gmatch $line ("*OLM Special Effects*")`){
+			$curLine = "<span style=\"color:rgb(102,102,102);font-family:georgia,serif\">OLM Special Effects</span><br></br>";
+		}
+        else {$curLine = ($line+"<br>");}  
+        $html [`size $html`] = $curLine;
+    }
+	
+    $html [`size $html`] = "</p></body></html>";
+    //clear the html Field
+    scrollField -e -cl $htmlField;
+	//fill the htmlField with the new data
+	for ($line in $html){scrollField -e -it ($line+"\n") $htmlField;}
+	//save the entire html as a single string in the mailNode
+	$htmlString =  `stringArrayToString $html "\n"`;
+	setAttr -type "string" mailNode.htmlString $htmlString;
+}
+
+//launch the python mailer and send all data
+
+global proc sendIt(){
+    string $textField = `getAttr mailNode.textField`;
+    string $user = `getenv USERNAME`;
+    int $isIt = `filetest -r ("//192.168.11.200/_AC_work/forrest/epw.txt")`;
+    if ($isIt==0){emailPW;}
+    convertToHtml;
+    waitCursor -st 1;
+    scrollField -e -bgc 0.8 0.5 0.0 -tx "   PLEASE WAIT   " $textField;
+    refresh -f;
+    python("execfile('//192.168.11.200/_AC_work/forrest/scripts/sendMail.py')");
+    waitCursor -st 0;
+}
+
+//prompt for the users email password if it's not already stored.
+
+global proc emailPW(){
+    string $password;
+    string $user = `getenv USERNAME`;
+    string $message = ("Please enter your OLM email password.\nThis information will be saved to /salu/home/"+$user+"/epw.txt\nOnly you can view this file\nYou can delete the file at any time");
+    string $Confirm = `promptDialog -title "Please enter password" -message $message `;
+    if ($Confirm == "Confirm"){
+        $password = `promptDialog -query -text`;
+        string $makePW = ("echo "+$password+" > \\\\192.168.11.200\\_AC_work\\forrest\\epw.txt");
+        scriptEditorInfo -ch;
+        string $lockPW = ("chmod 600 /salu/home/"+$user+"/epw.txt");
+        system ($makePW);
+        //system ($lockPW);
+    }
+}
+
+makeMailNode;
+makeMailUI;
+fillOutMail(0);
+convertToHtml;
